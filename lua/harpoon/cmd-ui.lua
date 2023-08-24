@@ -2,7 +2,7 @@ local harpoon = require("harpoon")
 local popup = require("plenary.popup")
 local utils = require("harpoon.utils")
 local log = require("harpoon.dev").log
-local term = require("harpoon.term")
+local term = require("harpoon.tmux")
 
 local M = {}
 

@@ -4,7 +4,7 @@ local global_config = harpoon.get_global_settings()
 local utils = require("harpoon.utils")
 
 local M = {}
-local tmux_windows = {}
+local active_pane 
 
 if global_config.tmux_autoclose_windows then
     local harpoon_tmux_group = vim.api.nvim_create_augroup(
@@ -23,77 +23,47 @@ end
 local function create_terminal()
     log.trace("tmux: _create_terminal())")
 
-    local window_id
-
     -- Create a new tmux window and store the window id
     local out, ret, _ = utils.get_os_command_output({
         "tmux",
-        "new-window",
+        "spilt-window",
+        "-l",
+        "20",
         "-P",
-        "-F",
-        "#{pane_id}",
-    }, vim.loop.cwd())
+    }, vim.loop.cwd()) -- return session:windown.pane
 
-    if ret == 0 then
-        window_id = out[1]:sub(2)
-    end
-
-    if window_id == nil then
-        log.error("tmux: _create_terminal(): window_id is nil")
+    if(ret == nil) then
         return nil
     end
-
-    return window_id
+    return out
 end
 
 -- Checks if the tmux window with the given window id exists
-local function terminal_exists(window_id)
+local function terminal_exists(window_id) -- called with %pane_id
     log.trace("_terminal_exists(): Window:", window_id)
 
-    local exists = false
+    if (active_pane == nil) then
+        return false
+    end
 
-    local window_list, _, _ = utils.get_os_command_output({
+    local out, _, _ = utils.get_os_command_output({
         "tmux",
-        "list-windows",
+        "has-session",
+        active_pane
     }, vim.loop.cwd())
 
     -- This has to be done this way because tmux has-session does not give
     -- updated results
-    for _, line in pairs(window_list) do
-        local window_info = utils.split_string(line, "@")[2]
-
-        if string.find(window_info, string.sub(window_id, 2)) then
-            exists = true
-        end
-    end
-
-    return exists
+    
+    return #out > 0
 end
 
 local function find_terminal(args)
     log.trace("tmux: _find_terminal(): Window:", args)
 
-    if type(args) == "string" then
-        -- assume args is a valid tmux target identifier
-        -- if invalid, the error returned by tmux will be thrown
-        return {
-            window_id = args,
-            pane = true,
-        }
-    end
+    local window_exists = terminal_exists()
 
-    if type(args) == "number" then
-        args = { idx = args }
-    end
-
-    local window_handle = tmux_windows[args.idx]
-    local window_exists
-
-    if window_handle then
-        window_exists = terminal_exists(window_handle.window_id)
-    end
-
-    if not window_handle or not window_exists then
+    if not window_exists then
         local window_id = create_terminal()
 
         if window_id == nil then
@@ -101,14 +71,8 @@ local function find_terminal(args)
             return
         end
 
-        window_handle = {
-            window_id = "%" .. window_id,
-        }
-
-        tmux_windows[args.idx] = window_handle
+        active_pane = window_id
     end
-
-    return window_handle
 end
 
 local function get_first_empty_slot()
@@ -123,13 +87,13 @@ end
 
 function M.gotoTerminal(idx)
     log.trace("tmux: gotoTerminal(): Window:", idx)
-    local window_handle = find_terminal(idx)
+    find_terminal(idx)
 
     local _, ret, stderr = utils.get_os_command_output({
         "tmux",
-        window_handle.pane and "select-pane" or "select-window",
+        "select-pane"
         "-t",
-        window_handle.window_id,
+        active_pane
     }, vim.loop.cwd())
 
     if ret ~= 0 then
@@ -158,6 +122,7 @@ function M.sendCommand(idx, cmd, ...)
             "-t",
             window_handle.window_id,
             string.format(cmd, ...),
+            "ENTER"
         }, vim.loop.cwd())
 
         if ret ~= 0 then
@@ -169,17 +134,14 @@ end
 function M.clear_all()
     log.trace("tmux: clear_all(): Clearing all tmux windows.")
 
-    for _, window in pairs(tmux_windows) do
-        -- Delete the current tmux window
+    if active_pane then
         utils.get_os_command_output({
             "tmux",
-            "kill-window",
+            "kill-pane",
             "-t",
-            window.window_id,
+            active_pane
         }, vim.loop.cwd())
     end
-
-    tmux_windows = {}
 end
 
 function M.get_length()
