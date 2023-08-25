@@ -4,7 +4,6 @@ local global_config = harpoon.get_global_settings()
 local utils = require("harpoon.utils")
 
 local M = {}
-local active_pane 
 
 if global_config.tmux_autoclose_windows then
     local harpoon_tmux_group = vim.api.nvim_create_augroup(
@@ -24,55 +23,58 @@ local function create_terminal()
     log.trace("tmux: _create_terminal())")
 
     -- Create a new tmux window and store the window id
-    local out, ret, _ = utils.get_os_command_output({
+    local out, ret, err = utils.get_os_command_output({
         "tmux",
-        "spilt-window",
+        "split-window",
         "-l",
         "20",
         "-P",
     }, vim.loop.cwd()) -- return session:windown.pane
 
+    log.debug("create_terminal > "..vim.inspect(out), ret, err)
     if(ret == nil) then
         return nil
     end
-    return out
+    return out[1]
 end
 
 -- Checks if the tmux window with the given window id exists
 local function terminal_exists(window_id) -- called with %pane_id
     log.trace("_terminal_exists(): Window:", window_id)
 
-    if (active_pane == nil) then
+    if (window_id == nil) then
         return false
     end
 
-    local out, _, _ = utils.get_os_command_output({
+    local _, ret, _ = utils.get_os_command_output({
         "tmux",
         "has-session",
-        active_pane
+        "-t",
+        window_id,
     }, vim.loop.cwd())
 
     -- This has to be done this way because tmux has-session does not give
     -- updated results
-    
-    return #out > 0
+
+    return ret ~= 1
 end
 
-local function find_terminal(args)
+local function find_terminal(id)
     log.trace("tmux: _find_terminal(): Window:", args)
 
-    local window_exists = terminal_exists()
+    local window_exists = terminal_exists(id)
 
     if not window_exists then
         local window_id = create_terminal()
 
         if window_id == nil then
             error("Failed to find and create tmux window.")
-            return
+            return nil
         end
+        return window_id
 
-        active_pane = window_id
     end
+    return id
 end
 
 local function get_first_empty_slot()
@@ -91,9 +93,9 @@ function M.gotoTerminal(idx)
 
     local _, ret, stderr = utils.get_os_command_output({
         "tmux",
-        "select-pane"
+        "select-pane",
         "-t",
-        active_pane
+        M.active_pane,
     }, vim.loop.cwd())
 
     if ret ~= 0 then
@@ -103,7 +105,11 @@ end
 
 function M.sendCommand(idx, cmd, ...)
     log.trace("tmux: sendCommand(): Window:", idx)
-    local window_handle = find_terminal(idx)
+    local id = M.active_pane
+    if (type(idx) == "string") then
+        id = idx
+    end
+    M.active_pane = find_terminal(id)
 
     if type(cmd) == "number" then
         cmd = harpoon.get_term_config().cmds[cmd]
@@ -116,17 +122,25 @@ function M.sendCommand(idx, cmd, ...)
     if cmd then
         log.debug("sendCommand:", cmd)
 
-        local _, ret, stderr = utils.get_os_command_output({
+        local job_cmd = {
             "tmux",
             "send-keys",
             "-t",
-            window_handle.window_id,
+            M.active_pane,
             string.format(cmd, ...),
             "ENTER"
-        }, vim.loop.cwd())
+        }
+        log.debug("============job_command================:", job_cmd)
+        local _, ret, stderr = utils.get_os_command_output(job_cmd, vim.loop.cwd())
 
         if ret ~= 0 then
             error("Failed to send command. " .. stderr[1])
+        else
+            local _, ret, stderr = utils.get_os_command_output({
+                "tmux",
+                "select-pane",
+                "-l",
+            }, vim.loop.cwd())
         end
     end
 end
@@ -134,12 +148,12 @@ end
 function M.clear_all()
     log.trace("tmux: clear_all(): Clearing all tmux windows.")
 
-    if active_pane then
+    if M.active_pane then
         utils.get_os_command_output({
             "tmux",
             "kill-pane",
             "-t",
-            active_pane
+            M.active_pane
         }, vim.loop.cwd())
     end
 end
@@ -192,3 +206,7 @@ function M.set_cmd_list(new_list)
 end
 
 return M
+
+
+
+
