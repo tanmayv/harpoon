@@ -31,7 +31,6 @@ local function create_terminal()
         "-P",
     }, vim.loop.cwd()) -- return session:windown.pane
 
-    log.debug("create_terminal > "..vim.inspect(out), ret, err)
     if(ret == nil) then
         return nil
     end
